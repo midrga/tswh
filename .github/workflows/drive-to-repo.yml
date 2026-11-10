@@ -1,0 +1,58 @@
+name: drive-to-repo
+
+# Pobiera publiczne pliki z Google Drive i zapisuje je w repo w tmp/<nazwa>/.
+# Uruchamia sie po wgraniu pliku jobs/<nazwa>.txt z liniami: "<nazwa_pliku> <id_z_Drive>".
+# Linki dla Meta: https://raw.githubusercontent.com/<repo>/<SHA>/tmp/<nazwa>/<nazwa_pliku>
+# (linki z wydan GitHub Meta odrzuca, dlatego pliki ida do repo; limit 100 MB na plik).
+
+on:
+  push:
+    branches: [main]
+    paths: ['jobs/*.txt']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: drive-to-repo
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Usun testowe wydanie z pierwszej wersji akcji
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete test-bn2 --yes --cleanup-tag || true
+      - name: Pobierz pliki z Drive i zapisz w repo
+        run: |
+          set -euo pipefail
+          changed=$(git diff --name-only --diff-filter=AM HEAD~1 HEAD -- 'jobs/*.txt' || true)
+          [ -z "$changed" ] && { echo "brak nowych list"; exit 0; }
+          for job in $changed; do
+            tag=$(basename "$job" .txt)
+            [[ "$tag" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "zla nazwa listy: $tag"; exit 1; }
+            mkdir -p "tmp/$tag"
+            while read -r name id; do
+              [ -z "${name:-}" ] && continue
+              case "$name" in \#*) continue;; esac
+              [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "zla nazwa: $name"; exit 1; }
+              [[ "$id" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "zle id: $id"; exit 1; }
+              curl -sSL --fail -o "tmp/$tag/$name" \
+                "https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t"
+              type=$(file -b --mime-type "tmp/$tag/$name")
+              size=$(stat -c %s "tmp/$tag/$name")
+              echo "$name $type $size"
+              case "$type" in image/*|video/*) ;; *) echo "nie obraz/film: $name ($type) - plik niepubliczny?"; exit 1;; esac
+              [ "$size" -lt 99000000 ] || { echo "za duzy dla repo (100 MB): $name"; exit 1; }
+            done < "$job"
+          done
+          git config user.name "drive-to-repo"
+          git config user.email "actions@users.noreply.github.com"
+          git add tmp
+          git commit -m "Pliki z Drive: $(echo $changed | xargs -n1 basename | tr '\n' ' ')"
+          git push
