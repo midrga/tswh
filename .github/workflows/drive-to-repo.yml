@@ -4,6 +4,7 @@ name: drive-to-repo
 # Uruchamia sie po wgraniu pliku jobs/<nazwa>.txt z liniami: "<nazwa_pliku> <id_z_Drive>".
 # Linki dla Meta: https://raw.githubusercontent.com/<repo>/<SHA>/tmp/<nazwa>/<nazwa_pliku>
 # (linki z wydan GitHub Meta odrzuca, dlatego pliki ida do repo; limit 100 MB na plik).
+# Film od 95 MB akcja kompresuje do ok. 90 MB (scripts/kompresja.sh); wynik zawsze ma rozszerzenie .mp4.
 
 on:
   push:
@@ -48,7 +49,12 @@ jobs:
               size=$(stat -c %s "tmp/$tag/$name")
               echo "$name $type $size"
               case "$type" in image/*|video/*) ;; *) echo "nie obraz/film: $name ($type) - plik niepubliczny?"; exit 1;; esac
-              [ "$size" -lt 99000000 ] || { echo "za duzy dla repo (100 MB): $name"; exit 1; }
+              if [ "$size" -ge 95000000 ]; then
+                case "$type" in video/*) ;; *) echo "za duzy dla repo (100 MB): $name"; exit 1;; esac
+                out=$(bash scripts/kompresja.sh "tmp/$tag/$name")
+                echo "skompresowany: $name -> $(basename "$out") ($size -> $(stat -c %s "$out") B)"
+                [ "$(stat -c %s "$out")" -lt 99000000 ] || { echo "po kompresji nadal za duzy: $out"; exit 1; }
+              fi
             done < "$job"
           done
           git config user.name "drive-to-repo"
